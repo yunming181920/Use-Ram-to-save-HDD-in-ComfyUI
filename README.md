@@ -15,9 +15,10 @@ Make sure to also copy the necessary import statements.
 2. Then, launch **ComfyUI** or **Akie Launcher**.
 
 > ⚠️ **Note:**  
-> This approach trades memory for speed, so it requires a large amount of RAM.  
-> It is recommended to use at least **64 GB of memory**, or enable **virtual memory on an SSD** if sufficient RAM is not available.  
+> This approach trades memory for speed, so it requires a large amount of RAM. It is recommended to use at least **64 GB of memory**, or enable **virtual memory on an SSD** if sufficient RAM is not available.
+  
 > Alternatively, you can change all references to the Z: drive in the code to a specific folder on your SATA SSD. This way, files will only be added or deleted within that folder.However, do not attempt this if you do not have coding experience.
+ 
 > You can change the 27GB in .bat to the size of the largest model in your workflow.
 ### Performance Improvement
 
