@@ -60,70 +60,40 @@ def _load_safetensors(ckpt, device, return_metadata, use_ram_cache):
 
     # 文件较大，先复制到内存再加载
     logging.info("将文件复制到内存...")
+
+    tmp_path = None
     try:
-        # 直接在内存中读取整个文件
-        with open(ckpt, 'rb') as f:
-            file_bytes = f.read()
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".sft") as tmp_file:
+            tmp_path = tmp_file.name
+            shutil.copy2(ckpt, tmp_path)
+            logging.info(f"文件已复制到临时路径: {tmp_path}")
 
-        logging.info(f"文件已加载到内存: {len(file_bytes) / 1024 / 1024:.2f} MB")
-
-        return _load_safetensors_from_memory(file_bytes, device, return_metadata)
+        # 加载临时文件（可能会提前 return）
+        result = _load_safetensors_direct(tmp_path, device, return_metadata)
+        return result
 
     except Exception as e:
         logging.error(f"内存加载失败，尝试直接加载: {e}")
         return _load_safetensors_direct(ckpt, device, return_metadata)
 
-
-def _load_safetensors_from_memory(memory_bytes, device, return_metadata):
-    """从内存字节数据加载 safetensors"""
-    try:
-        # 使用 safetensors 的 deserialize 方法直接从字节数据加载
-        tensors = safetensors.torch.deserialize(memory_bytes)
-
-        sd = {}
-        for k, tensor in tensors.items():
-            # 确保张量在正确的设备上
-            if tensor.device != device:
-                tensor = tensor.to(device=device, copy=True)
-            sd[k] = tensor
-
-        # 获取元数据
-        metadata = None
-        if return_metadata:
-            # 从字节数据中提取元数据
-            import struct
-            # safetensors 格式：前 8 字节是 header 长度（小端序 uint64）
-            header_len = struct.unpack('<Q', memory_bytes[:8])[0]
-            import json
-            header_data = memory_bytes[8:8 + header_len].decode('utf-8')
-            header_json = json.loads(header_data)
-            metadata = header_json.get('__metadata__', {})
-
-        return (sd, metadata) if return_metadata else sd
-
-    except Exception as e:
-        if len(e.args) > 0:
-            message = e.args[0]
-            if "HeaderTooLarge" in message:
-                raise ValueError(
-                    f"{message}\n\nThe safetensors file is corrupt or invalid. "
-                    "Make sure this is actually a safetensors file and not a ckpt or pt or other filetype."
-                )
-            if "MetadataIncompleteBuffer" in message:
-                raise ValueError(
-                    f"{message}\n\nThe safetensors file is corrupt/incomplete. "
-                    "Check the file size and make sure you have copied/downloaded it correctly."
-                )
-        raise e
+    finally:
+        # 确保删除临时文件
+        if tmp_path and os.path.exists(tmp_path):
+            try:
+                os.unlink(tmp_path)
+                logging.info(f"临时文件已删除: {tmp_path}")
+            except Exception as del_err:
+                logging.warning(f"删除临时文件失败: {del_err}")
 
 
 def _load_safetensors_direct(ckpt, device, return_metadata):
-    """直接加载 safetensors 文件（用于小文件）"""
+    """直接加载 safetensors 文件"""
     try:
         with safetensors.safe_open(ckpt, framework="pt", device=device.type) as f:
             sd = {}
             for k in f.keys():
                 tensor = f.get_tensor(k)
+                # 确保张量在正确的设备上
                 if tensor.device != device:
                     tensor = tensor.to(device=device, copy=True)
                 sd[k] = tensor
