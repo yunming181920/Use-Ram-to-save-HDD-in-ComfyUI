@@ -11,9 +11,10 @@ from torch.nn.functional import interpolate
 from einops import rearrange
 from comfy.cli_args import args
 import io
+from io import BytesIO
 import logging
 import gc
-from safetensors.torch import load_file as safetensors_load_file
+from safetensors.torch import load_file
 import tempfile
 import shutil
 import os
@@ -21,6 +22,11 @@ from pathlib import Path
 import struct
 import json
 import safetensors.torch
+import string
+import subprocess
+import time
+import sys
+import stat
 MMAP_TORCH_FILES = args.mmap_torch_files
 DISABLE_MMAP = args.disable_mmap
 
@@ -61,29 +67,28 @@ def _load_safetensors(ckpt, device, return_metadata, use_ram_cache):
     # 文件较大，先复制到内存再加载
     logging.info("将文件复制到内存...")
 
-    tmp_path = None
-    try:
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".sft") as tmp_file:
-            tmp_path = tmp_file.name
-            shutil.copy2(ckpt, tmp_path)
-            logging.info(f"文件已复制到临时路径: {tmp_path}")
+    z_path = Path("Z:/")
+    target_path = z_path / Path(ckpt).name
 
-        # 加载临时文件（可能会提前 return）
-        result = _load_safetensors_direct(tmp_path, device, return_metadata)
-        return result
-
-    except Exception as e:
-        logging.error(f"内存加载失败，尝试直接加载: {e}")
-        return _load_safetensors_direct(ckpt, device, return_metadata)
-
-    finally:
-        # 确保删除临时文件
-        if tmp_path and os.path.exists(tmp_path):
+    # 清空 Z 盘内容
+    if z_path.exists() and z_path.is_dir():
+        for item in z_path.iterdir():
             try:
-                os.unlink(tmp_path)
-                logging.info(f"临时文件已删除: {tmp_path}")
-            except Exception as del_err:
-                logging.warning(f"删除临时文件失败: {del_err}")
+                if item.is_dir():
+                    shutil.rmtree(item)
+                else:
+                    item.unlink()
+            except Exception as e:
+                logging.warning(f"删除 Z 盘内容失败: {item}, 错误: {e}")
+
+    # 复制文件到 Z 盘
+    shutil.copy2(ckpt, target_path)
+    logging.info(f"📂 文件已复制到 Z 盘: {target_path}")
+
+    return _load_safetensors_direct(target_path, device, return_metadata)
+
+
+
 
 
 def _load_safetensors_direct(ckpt, device, return_metadata):
@@ -120,15 +125,25 @@ def _load_safetensors_direct(ckpt, device, return_metadata):
 
 
 def _load_torch_checkpoint(ckpt, device, return_metadata, safe_load):
-    """加载传统 torch checkpoint 文件"""
+    """加载传统 torch checkpoint 文件到内存再读取"""
     torch_args = {}
+
+    logging.info(f"将 {ckpt} 文件加载到内存中...")
+    try:
+        with open(ckpt, "rb") as f:
+            file_bytes = f.read()
+    except Exception as e:
+        logging.error(f"读取文件 {ckpt} 失败: {e}")
+        raise
+
+    buffer = BytesIO(file_bytes)
 
     if safe_load:
         logging.info("使用安全加载模式...")
-        pl_sd = torch.load(ckpt, map_location=device, weights_only=True, **torch_args)
+        pl_sd = torch.load(buffer, map_location=device, weights_only=True, **torch_args)
     else:
         logging.warning(f"WARNING: loading {ckpt} unsafely, upgrade your pytorch to 2.4 or newer")
-        pl_sd = torch.load(ckpt, map_location=device)
+        pl_sd = torch.load(buffer, map_location=device)
 
     # 解析状态字典
     if "state_dict" in pl_sd:
